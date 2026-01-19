@@ -1,0 +1,16 @@
+# Arduino build files
+*.elf
+*.hex
+*.bin
+
+# VS Code
+.vscode/
+
+# PlatformIO (if you switch later)
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# OS junk
+.DS_Store
+Thumbs.db
