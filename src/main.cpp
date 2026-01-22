@@ -10,7 +10,7 @@ const char* password = "-";
 
 // ===== SERVER URL =====
 // Your working URL from the monitor:
-const char* url = "http://192.168.33.2:8088/queue";
+const char* url = "-";
 
 // ===== LCD =====
 // You said 0x27 worked ✅
