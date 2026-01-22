@@ -1,68 +1,135 @@
 #include <Arduino.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
 
-// COMMON ANODE: LOW=ON, HIGH=OFF
-const int ON  = HIGH;
-const int OFF = LOW;
+// ===== WIFI =====
+const char* ssid = "-";
+const char* password = "-";
 
-// Put YOUR GPIO mapping here (must be UNIQUE for each segment)
-int SEG_A = 22;   // you said 22=a
-int SEG_B = 23;   // <-- you must find/fix this (currently missing)
-int SEG_C = 18;   // you said 18=c (then 23 cannot be c)
-int SEG_D = 17;   // you said 17=d
-int SEG_E = 16;   // you said 16=e
-int SEG_F = 21;   // you said 21=f
-int SEG_G = 19;   // you said 19=g
+// ===== SERVER URL =====
+// Your working URL from the monitor:
+const char* url = "http://192.168.33.2:8088/queue";
 
-int segPins[7];   // will be filled in setup
+// ===== LCD =====
+// You said 0x27 worked ✅
+LiquidCrystal_I2C lcd(0x27, 16, 2);
 
-//          a b c d e f g   (1 means segment should be ON)
-const uint8_t digits[10][7] = {
-  {1,1,1,1,1,1,0}, // 0
-  {0,1,1,0,0,0,0}, // 1
-  {1,1,0,1,1,0,1}, // 2
-  {1,1,1,1,0,0,1}, // 3
-  {0,1,1,0,0,1,1}, // 4
-  {1,0,1,1,0,1,1}, // 5
-  {1,0,1,1,1,1,1}, // 6
-  {1,1,1,0,0,0,0}, // 7
-  {1,1,1,1,1,1,1}, // 8
-  {1,1,1,1,0,1,1}  // 9
-};
+// ===== SETTINGS =====
+const uint32_t POLL_MS = 2000;   // refresh every 2 seconds
 
-void showDigit(int n) {
-  for (int i = 0; i < 7; i++) {
-    digitalWrite(segPins[i], digits[n][i] ? ON : OFF);
+// keep last values so we only redraw when something changes
+int lastW = -1, lastA = -1, lastC = -1;
+
+static int parseValueAfter(const String& s, const char key) {
+  // Finds "W:" or "A:" or "C:" and reads the number after it
+  int idx = s.indexOf(String(key) + ":");
+  if (idx < 0) return -1;
+  idx += 2; // skip "X:"
+  // skip spaces if any
+  while (idx < (int)s.length() && s[idx] == ' ') idx++;
+
+  String num;
+  while (idx < (int)s.length() && isDigit((unsigned char)s[idx])) {
+    num += s[idx++];
   }
+  if (num.length() == 0) return -1;
+  return num.toInt();
+}
+
+static void printPadded(int col, int row, const String& text) {
+  lcd.setCursor(col, row);
+  String t = text;
+  if (t.length() > 16) t = t.substring(0, 16);
+  lcd.print(t);
+  // clear rest of line
+  for (int i = t.length(); i < 16; i++) lcd.print(" ");
 }
 
 void setup() {
-  // Fill in order a,b,c,d,e,f,g
-  segPins[0] = SEG_A;
-  segPins[1] = SEG_B;
-  segPins[2] = SEG_C;
-  segPins[3] = SEG_D;
-  segPins[4] = SEG_E;
-  segPins[5] = SEG_F;
-  segPins[6] = SEG_G;
+  Serial.begin(115200);
+  delay(300);
 
-  // If any segment pin is still -1, stop here (avoid weird output)
-  for (int i = 0; i < 7; i++) {
-    if (segPins[i] < 0) {
-      // Blink onboard LED? (optional) For now just hang.
-      while (true) { delay(1000); }
-    }
-  }
+  // I2C pins for ESP32
+  Wire.begin(21, 22);
+  Wire.setClock(100000);
 
-  for (int i = 0; i < 7; i++) {
-    pinMode(segPins[i], OUTPUT);
-    digitalWrite(segPins[i], OFF);
+  // LCD init
+  lcd.init();
+  lcd.backlight();
+
+  printPadded(0, 0, "Bistro Queue");
+  printPadded(0, 1, "Connecting...");
+
+  // WiFi connect
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
   }
+  Serial.println("\nWiFi connected!");
+  Serial.print("ESP32 IP: ");
+  Serial.println(WiFi.localIP());
+
+  printPadded(0, 1, "WiFi OK");
+  delay(600);
 }
 
 void loop() {
-  for (int n = 0; n <= 9; n++) {
-    showDigit(n);
-    delay(1000);
+  static uint32_t lastPoll = 0;
+  if (millis() - lastPoll < POLL_MS) return;
+  lastPoll = millis();
+
+  if (WiFi.status() != WL_CONNECTED) {
+    printPadded(0, 0, "WiFi LOST");
+    printPadded(0, 1, "Reconnecting..");
+    WiFi.disconnect();
+    WiFi.begin(ssid, password);
+    return;
+  }
+
+  HTTPClient http;
+  http.begin(url);
+
+  int code = http.GET();
+  Serial.print("HTTP code: ");
+  Serial.println(code);
+
+  if (code != 200) {
+    printPadded(0, 0, "Server error");
+    printPadded(0, 1, "Retrying...");
+    http.end();
+    return;
+  }
+
+  String payload = http.getString();
+  http.end();
+
+  Serial.println("Payload:");
+  Serial.println(payload);
+
+  int W = parseValueAfter(payload, 'W');
+  int A = parseValueAfter(payload, 'A');
+  int C = parseValueAfter(payload, 'C');
+
+  // If parsing failed, show raw (debug)
+  if (W < 0 && A < 0 && C < 0) {
+    printPadded(0, 0, "Bad payload");
+    printPadded(0, 1, payload);
+    return;
+  }
+
+  // Update LCD only if something changed (prevents flicker)
+  if (W != lastW || A != lastA || C != lastC) {
+    lastW = W; lastA = A; lastC = C;
+
+    printPadded(0, 0, "Waiting: " + String(W));
+    printPadded(0, 1, "Arrived: " + String(A));
+    // If you prefer Completed instead:
+    // printPadded(0, 1, "Done: " + String(C));
   }
 }
+
 
