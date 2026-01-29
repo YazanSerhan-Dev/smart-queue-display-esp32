@@ -13,7 +13,6 @@ The system uses **MQTT (publish/subscribe)** to push updates instantly, avoiding
 → **MQTT Broker (Mosquitto)**  
 → pushes updates  
 → **ESP32 Subscriber**  
-→ displays data on LCD / 7-segment display
 
 ---
 
